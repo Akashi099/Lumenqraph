@@ -51,4 +51,8 @@ impl IntoResponse for ApiError {
     }
 }
 
+pub fn rate_limit_error() -> Json<serde_json::Value> {
+    Json(json!({ "error": "rate limit exceeded" }))
+}
+
 pub type ApiResult<T> = Result<T, ApiError>;
