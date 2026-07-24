@@ -35,17 +35,55 @@ fn is_internal_address(host: &str) -> bool {
     }
 
     if let Ok(ip) = host.parse::<IpAddr>() {
-        return ip.is_loopback()
-            || ip.is_private()
-            || ip.is_link_local()
-            || ip.is_multicast()
-            || (match ip {
-                IpAddr::V4(v4) => v4.is_reserved() || v4.is_documentation(),
-                IpAddr::V6(v6) => v6.is_documentation(),
-            });
+        return is_reserved_ip(&ip);
     }
 
     false
+}
+
+fn is_reserved_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_multicast()
+                || v4.is_broadcast()
+                || (v4.octets()[0] == 0)
+                || is_documentation_v4(v4)
+                || is_reserved_v4(v4)
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_multicast()
+                || v6.is_unicast_link_local()
+                || v6.is_unspecified()
+                || v6.is_unique_local()
+                || is_documentation_v6(v6)
+        }
+    }
+}
+
+fn is_documentation_v4(ip: &std::net::Ipv4Addr) -> bool {
+    let octets = ip.octets();
+    (octets[0] == 192 && octets[1] == 0 && octets[2] == 2)
+        || (octets[0] == 198 && octets[1] == 51 && octets[2] == 100)
+        || (octets[0] == 203 && octets[1] == 0 && octets[2] == 113)
+}
+
+fn is_reserved_v4(ip: &std::net::Ipv4Addr) -> bool {
+    let octets = ip.octets();
+    (octets[0] == 100 && octets[1] >= 64 && octets[1] <= 127)
+        || (octets[0] == 192 && octets[1] == 168)
+        || (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31)
+        || (octets[0] == 10)
+        || (octets[0] == 127)
+        || (octets[0] == 169 && octets[1] == 254)
+}
+
+fn is_documentation_v6(ip: &std::net::Ipv6Addr) -> bool {
+    let segments = ip.segments();
+    segments[0] == 0x2001 && segments[1] == 0xdb8
 }
 
 fn is_localhost(host: &str) -> bool {
