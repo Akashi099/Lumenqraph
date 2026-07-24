@@ -22,8 +22,19 @@ pub type AppSchema = Schema<QueryRoot, EmptyMutation, EmptySubscription>;
 
 /// Build the schema, injecting the shared connection pool as context data.
 pub fn build_schema(pool: PgPool) -> AppSchema {
+    let max_depth = std::env::var("GRAPHQL_MAX_DEPTH")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(12);
+    let max_complexity = std::env::var("GRAPHQL_MAX_COMPLEXITY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1000);
+
     Schema::build(QueryRoot, EmptyMutation, EmptySubscription)
         .data(pool)
+        .limit_depth(max_depth)
+        .limit_complexity(max_complexity)
         .finish()
 }
 
