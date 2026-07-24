@@ -17,6 +17,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use anyhow::Context;
+use axum::extract::DefaultBodyLimit;
 use axum::http;
 use sqlx::postgres::PgPoolOptions;
 use tower_http::trace::TraceLayer;
@@ -119,7 +120,11 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let cors_layer = build_cors_layer();
+    let max_body_bytes = env_parse::<u32>("API_MAX_BODY_BYTES", 256 * 1024);
+    info!(max_body_bytes, "enforcing request body size limit");
+
     let app = routes::router(state)
+        .layer(DefaultBodyLimit::max(max_body_bytes as usize))
         .layer(TraceLayer::new_for_http())
         .layer(cors_layer);
 
