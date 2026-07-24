@@ -10,13 +10,13 @@ use async_graphql::Json as GqlJson;
 use async_graphql::{
     Context, EmptyMutation, EmptySubscription, Object, Result, Schema, SimpleObject,
 };
-use base64::engine::general_purpose::STANDARD as B64;
-use base64::Engine;
 use chrono::{DateTime, Utc};
 use lumenqraph_core::{Contract, EventRow, TokenTransfer};
 use serde_json::Value;
 use sqlx::types::Json as SqlxJson;
 use sqlx::PgPool;
+
+use crate::pagination;
 
 pub type AppSchema = Schema<QueryRoot, EmptyMutation, EmptySubscription>;
 
@@ -25,26 +25,6 @@ pub fn build_schema(pool: PgPool) -> AppSchema {
     Schema::build(QueryRoot, EmptyMutation, EmptySubscription)
         .data(pool)
         .finish()
-}
-
-// ---- Opaque cursors ----
-//
-// A cursor encodes the (ledger, event_id) position of the row it points at.
-// Paging with `after` returns rows strictly older than that position under the
-// canonical `ORDER BY ledger DESC, event_id DESC`.
-
-fn encode_cursor(ledger: i64, id: &str) -> String {
-    B64.encode(format!("{ledger}|{id}"))
-}
-
-/// Decode a cursor to `(ledger, event_id)`. Returns `None` for absent/malformed
-/// cursors, which the callers treat as "start from the newest".
-fn decode_cursor(cursor: Option<&str>) -> Option<(i64, String)> {
-    let raw = cursor?;
-    let bytes = B64.decode(raw).ok()?;
-    let s = String::from_utf8(bytes).ok()?;
-    let (ledger, id) = s.split_once('|')?;
-    Some((ledger.parse().ok()?, id.to_string()))
 }
 
 // ---- Types ----
@@ -207,7 +187,7 @@ impl QueryRoot {
     ) -> Result<EventConnection> {
         let pool = ctx.data::<PgPool>()?;
         let limit = first.unwrap_or(20).clamp(1, 200) as i64;
-        let after = decode_cursor(after.as_deref());
+        let after = pagination::decode_cursor(after.as_deref());
         let (after_ledger, after_id) = match after {
             Some((l, id)) => (Some(l), Some(id)),
             None => (None, None),
@@ -352,11 +332,11 @@ fn build_event_connection(mut rows: Vec<EventRow>, limit: i64) -> EventConnectio
     if has_next_page {
         rows.truncate(limit as usize);
     }
-    let end_cursor = rows.last().map(|e| encode_cursor(e.ledger, &e.event_id));
+    let end_cursor = rows.last().map(|e| pagination::encode_cursor(e.ledger, &e.event_id));
     let edges = rows
         .into_iter()
         .map(|e| EventEdge {
-            cursor: encode_cursor(e.ledger, &e.event_id),
+            cursor: pagination::encode_cursor(e.ledger, &e.event_id),
             node: Event::from(e),
         })
         .collect();
@@ -374,11 +354,11 @@ fn build_transfer_connection(mut rows: Vec<TokenTransfer>, limit: i64) -> Transf
     if has_next_page {
         rows.truncate(limit as usize);
     }
-    let end_cursor = rows.last().map(|t| encode_cursor(t.ledger, &t.event_id));
+    let end_cursor = rows.last().map(|t| pagination::encode_cursor(t.ledger, &t.event_id));
     let edges = rows
         .into_iter()
         .map(|t| TransferEdge {
-            cursor: encode_cursor(t.ledger, &t.event_id),
+            cursor: pagination::encode_cursor(t.ledger, &t.event_id),
             node: Transfer::from(t),
         })
         .collect();
@@ -397,7 +377,7 @@ mod tests {
 
     #[test]
     fn cursor_round_trips() {
-        let c = encode_cursor(42, "abc");
+        let c = pagination::encode_cursor(42, "abc");
         assert_eq!(decode_cursor(Some(&c)), Some((42, "abc".to_string())));
     }
 
