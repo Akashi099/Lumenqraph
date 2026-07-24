@@ -113,9 +113,31 @@ async fn poll_once(
     }
 
     let inserted = fetch_and_store(pool, rpc, config, specs, start, latest).await?;
+
+    // Trailing re-scan for shallow reorg detection.
+    // If configured, re-fetch the last N ledgers with upsert semantics to catch
+    // content changes that might have occurred due to chain reorgs.
+    let mut reorg_updated = 0u64;
+    if config.reorg_overlap_ledgers > 0 && latest > config.reorg_overlap_ledgers {
+        let reorg_start = latest - config.reorg_overlap_ledgers;
+        reorg_updated =
+            fetch_and_upsert(pool, rpc, config, specs, reorg_start, latest).await?;
+        if reorg_updated > 0 {
+            debug!(
+                reorg_updated,
+                reorg_start,
+                reorg_end = latest,
+                "trailing reorg re-scan complete"
+            );
+        }
+    }
+
     cursor::write_progress(pool, latest, latest, inserted).await?;
     if inserted > 0 {
         info!(inserted, up_to_ledger = latest, "indexed events");
+    }
+    if reorg_updated > 0 {
+        info!(reorg_updated, "events updated due to shallow reorg detection");
     }
     Ok(Some(latest))
 }
@@ -231,6 +253,56 @@ pub async fn fetch_and_store(
         }
     }
     Ok(total_inserted)
+}
+
+/// Re-fetch events from a range of recently-closed ledgers and upsert them,
+/// updating mutable fields if the RPC returned different content (shallow reorg).
+/// Returns the number of events updated.
+async fn fetch_and_upsert(
+    pool: &PgPool,
+    rpc: &RpcClient,
+    config: &Config,
+    specs: &SpecCache,
+    start: i64,
+    end: i64,
+) -> anyhow::Result<u64> {
+    let mut cursor_token: Option<String> = None;
+    let mut total_updated = 0u64;
+
+    loop {
+        let page = rpc
+            .get_events(
+                Some(start),
+                &config.contract_ids,
+                cursor_token.clone(),
+                config.page_size,
+            )
+            .await?;
+
+        let mut batch: Vec<NewEvent> = Vec::with_capacity(page.events.len());
+        for ev in &page.events {
+            // Stop if we've moved past the reorg window.
+            if ev.ledger > end {
+                return Ok(total_updated);
+            }
+            let spec = specs.get(pool, rpc, &ev.contract_id).await;
+            let new_event = to_new_event(ev, spec.as_deref());
+            batch.push(new_event);
+        }
+
+        if !batch.is_empty() {
+            let (_, updated) = store::upsert_events(pool, &batch).await?;
+            total_updated += updated;
+        }
+
+        cursor_token = page.cursor;
+        let n = batch.len();
+        if n < config.page_size as usize || cursor_token.is_none() {
+            break;
+        }
+    }
+
+    Ok(total_updated)
 }
 
 async fn shutdown_signal() {

@@ -1,10 +1,13 @@
 //! Persistence. Writes are idempotent (`ON CONFLICT DO NOTHING` on the unique
-//! `event_id`) so re-fetching a ledger never double-counts. Transfer events are
-//! additionally projected into the materialized `token_transfers` table.
+//! `event_id`) so re-fetching a ledger never double-counts. For shallow reorgs,
+//! `upsert_events` updates mutable fields (decoded values, enrichment) when the
+//! RPC returns different content for a recently-passed ledger.
+//! Transfer events are additionally projected into the materialized `token_transfers` table.
 
 use lumenqraph_core::NewEvent;
 use serde_json::Value;
 use sqlx::PgPool;
+use tracing::debug;
 
 /// Insert a batch of events (+ derived transfers) in one transaction. Returns
 /// the number of events newly inserted.
@@ -68,6 +71,84 @@ pub async fn insert_events(pool: &PgPool, events: &[NewEvent]) -> anyhow::Result
     }
     tx.commit().await?;
     Ok(inserted)
+}
+
+/// Insert a batch of events with upsert semantics for reorg handling.
+/// If an event already exists (same event_id), update mutable fields (decoded values, enrichment)
+/// in case the RPC returned different content for a recently-passed ledger (shallow reorg).
+/// Returns (inserted, updated) counts.
+pub async fn upsert_events(
+    pool: &PgPool,
+    events: &[NewEvent],
+) -> anyhow::Result<(u64, u64)> {
+    if events.is_empty() {
+        return Ok((0, 0));
+    }
+    let mut tx = pool.begin().await?;
+    let mut inserted = 0u64;
+    let mut updated = 0u64;
+
+    for e in events {
+        let topics = serde_json::to_value(&e.topics)?;
+        let decoded_topics = serde_json::to_value(&e.decoded_topics)?;
+        let result = sqlx::query(
+            "INSERT INTO events (
+                event_id, contract_id, ledger, ledger_closed_at, event_type,
+                topics, decoded_topics, event_name, value, decoded_value,
+                enriched, tx_hash, in_successful_call, paging_token
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+             ON CONFLICT (event_id) DO UPDATE SET
+                decoded_topics = EXCLUDED.decoded_topics,
+                decoded_value = EXCLUDED.decoded_value,
+                enriched = EXCLUDED.enriched",
+        )
+        .bind(&e.event_id)
+        .bind(&e.contract_id)
+        .bind(e.ledger)
+        .bind(e.ledger_closed_at)
+        .bind(&e.event_type)
+        .bind(&topics)
+        .bind(&decoded_topics)
+        .bind(&e.event_name)
+        .bind(&e.value)
+        .bind(&e.decoded_value)
+        .bind(&e.enriched)
+        .bind(&e.tx_hash)
+        .bind(e.in_successful_call)
+        .bind(&e.paging_token)
+        .execute(&mut *tx)
+        .await?;
+
+        let rows_affected = result.rows_affected();
+        if rows_affected == 1 {
+            // New insert
+            inserted += 1;
+            // Project transfer for new inserts
+            if let Some(t) = extract_transfer(e) {
+                let _ = sqlx::query(
+                    "INSERT INTO token_transfers
+                        (event_id, contract_id, from_addr, to_addr, amount, ledger, ledger_closed_at)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7)
+                     ON CONFLICT (event_id) DO NOTHING",
+                )
+                .bind(&t.event_id)
+                .bind(&t.contract_id)
+                .bind(&t.from_addr)
+                .bind(&t.to_addr)
+                .bind(&t.amount)
+                .bind(t.ledger)
+                .bind(t.ledger_closed_at)
+                .execute(&mut *tx)
+                .await?;
+            }
+        } else if rows_affected == 2 {
+            // Existing row was updated
+            updated += 1;
+            debug!(event_id = %e.event_id, "event updated due to shallow reorg");
+        }
+    }
+    tx.commit().await?;
+    Ok((inserted, updated))
 }
 
 struct Transfer {

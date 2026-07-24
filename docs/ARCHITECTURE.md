@@ -67,6 +67,32 @@ retained alongside the decoded JSON, so decoding is never lossy.
 
 ## Idempotency & reorgs
 
-All writes key on the unique event `id`, so re-fetching a ledger (restart, retry,
-shallow reorg) never double-counts. Stellar finality is fast, so deep reorgs are
-not a practical concern.
+### Guarantee and limitations
+
+All writes key on the unique event `id`, so re-fetching a ledger never double-counts.
+However, **the idempotency guarantee only prevents double-counting; it does not handle
+content changes** — if the RPC returns different event content for a ledger we already
+stored, the stored copy will silently diverge from canonical.
+
+**Deep reorgs** (the cursor falling behind the tip and needing to re-scan old ledgers)
+are rare due to Stellar's finality. The public RPC typically retains ~120,000 ledgers
+and rejects `getEvents` requests where `startLedger` is further behind.
+
+**Shallow reorgs** (the RPC returning different events for a recently-closed ledger)
+depend on the RPC's reorg exposure and whether `event_id` is stable across reorgs.
+**Stellar RPC behavior here is not formally documented**; this implementation assumes
+event content can change slightly if a reorg occurs within the last few ledgers.
+
+### Mitigation: trailing re-scan
+
+To handle shallow reorgs, enable `REORG_OVERLAP_LEDGERS` (default 0, disabled).
+Each cycle, the indexer re-fetches the last N ledgers and upserts events,
+updating mutable fields (`decoded_value`, `enriched`) if content changed.
+The dedupe on `event_id` still prevents double-counting during this re-scan.
+
+**Trade-offs:**
+- Small values (10–100 ledgers) provide shallow reorg protection with minimal overhead.
+- Larger values reduce reorg exposure but increase RPC requests and latency.
+- Requires careful tuning based on observed RPC behavior and your SLA for event exactness.
+
+If shallow reorgs cannot occur on your RPC, leave `REORG_OVERLAP_LEDGERS` at 0.

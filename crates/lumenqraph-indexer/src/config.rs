@@ -48,6 +48,13 @@ pub struct Config {
     /// contracts active in the cycle. `STATE_INDEXING` already reads each
     /// instance and detects upgrades for free, so this adds no calls alongside it.
     pub upgrade_watch: bool,
+    /// Number of ledgers to re-scan each cycle to handle shallow reorgs where
+    /// the RPC returns different events for recently-passed ledgers. Each cycle,
+    /// we re-fetch the last N ledgers and upsert events with updated content.
+    /// 0 (default) means no trailing re-scan. Small values (10-100) provide shallow
+    /// reorg protection with minimal overhead. Requires careful tuning based on
+    /// the RPC's reorg exposure.
+    pub reorg_overlap_ledgers: i64,
 }
 
 impl Config {
@@ -78,6 +85,7 @@ impl Config {
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| "persistent".to_string()),
             retention_ledgers: env_parse("RETENTION_LEDGERS", 0)?,
+            reorg_overlap_ledgers: env_parse("REORG_OVERLAP_LEDGERS", 0)?,
         })
     }
 }
