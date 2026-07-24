@@ -1,5 +1,9 @@
 # Contributing
 
+## Security
+
+Please report security vulnerabilities responsibly by following our [Security Policy](SECURITY.md). Do not open public issues for security-related concerns.
+
 ## Dev setup
 
 ```bash
@@ -47,3 +51,13 @@ CI runs all of the above against a Postgres service.
   applied migration.
 - Keep raw base64 alongside any decoded representation; decoding is best-effort
   and must never break ingestion.
+
+## Security Considerations
+
+When contributing code, especially around authentication, cryptography, or sensitive data:
+
+1. Use constant-time comparison for secrets and signatures (see [SECURITY.md](SECURITY.md))
+2. Never hardcode secrets or API keys
+3. Validate all user inputs and external data
+4. Avoid leaking sensitive information in error messages
+5. Keep dependencies up to date and audit transitive dependencies
