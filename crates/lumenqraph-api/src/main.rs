@@ -11,6 +11,7 @@ mod routes;
 mod rpc;
 mod specs;
 mod state;
+mod url_validation;
 
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
