@@ -14,6 +14,7 @@
 use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
 use hmac::{Hmac, Mac};
+use rand::Rng;
 use sha2::Sha256;
 use sqlx::types::Json;
 use sqlx::PgPool;
@@ -280,9 +281,13 @@ async fn mark_retry(
         .execute(pool)
         .await?;
     } else {
-        // Exponential backoff: 2^attempts seconds, capped at 1 hour.
-        let secs = 2i64.saturating_pow(attempts as u32).min(3600);
-        let next: DateTime<Utc> = Utc::now() + Duration::seconds(secs);
+        // Exponential backoff with full jitter: 2^attempts seconds, capped at 1 hour.
+        // Full jitter: sleep = random_between(0, min(cap, base * 2^attempts))
+        // This spreads out retries to prevent thundering herd when a subscriber recovers.
+        let max_secs = 2i64.saturating_pow(attempts as u32).min(3600);
+        let mut rng = rand::thread_rng();
+        let jittered_secs = rng.gen_range(0..=max_secs);
+        let next: DateTime<Utc> = Utc::now() + Duration::seconds(jittered_secs);
         sqlx::query(
             "UPDATE webhook_deliveries
              SET attempts=$2, last_error=$3, next_attempt_at=$4
@@ -444,5 +449,47 @@ mod tests {
         // The watermark has advanced, so a second pass finds nothing new.
         assert_eq!(enqueue(&pool, 100).await.unwrap(), 0);
         assert_eq!(fetch_due(&pool, 100).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs postgres"]
+    async fn webhook_retries_have_variance_in_scheduled_times() {
+        let pool = fixture().await;
+        subscribe(&pool, "event", None).await;
+
+        // Create multiple failed deliveries at the same time.
+        for i in 0..5 {
+            add_event(&pool, &format!("e{}", i)).await;
+        }
+        assert_eq!(enqueue(&pool, 100).await.unwrap(), 5);
+
+        // Simulate failures for all 5 deliveries.
+        let due = fetch_due(&pool, 100).await.unwrap();
+        assert_eq!(due.len(), 5);
+
+        for d in due {
+            mark_retry(&pool, &d, "test error", 5)
+                .await
+                .expect("mark retry");
+        }
+
+        // Fetch all scheduled retries and check their times are different.
+        let scheduled: Vec<DateTime<Utc>> = sqlx::query_scalar(
+            "SELECT next_attempt_at FROM webhook_deliveries WHERE status = 'pending' ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("fetch scheduled times");
+
+        assert_eq!(scheduled.len(), 5);
+
+        // With full jitter, we expect variance in the scheduled times.
+        // Check that at least some differ (very unlikely all 5 would be identical with jitter).
+        let unique_times: std::collections::HashSet<_> = scheduled.iter().collect();
+        assert!(
+            unique_times.len() > 1,
+            "Expected variance in retry times due to jitter, got {} unique times",
+            unique_times.len()
+        );
     }
 }
