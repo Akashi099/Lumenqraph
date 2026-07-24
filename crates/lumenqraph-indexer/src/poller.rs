@@ -20,11 +20,13 @@ use crate::{cursor, keys, retention, state, store};
 /// few seconds would spend more on probes than the deletes are worth.
 const PRUNE_INTERVAL: Duration = Duration::from_secs(60);
 
-/// getEvents only serves recent history. If our cursor falls further than this
-/// behind the tip, we clamp forward and log the (unrecoverable) gap.
-const MAX_LOOKBACK_LEDGERS: i64 = 120_000; // ~7 days at ~5s/ledger
+/// The RPC retention window: how far back the Soroban RPC will serve events.
+/// This is the hard limit of what's available via `getEvents` on SDF public RPC.
+/// Backfill and fresh-start clamping use this value. Note: MAX_CATCHUP_LEDGERS
+/// (in config) is a separate, more conservative limit for live polling performance.
+const MAX_LOOKBACK_LEDGERS: i64 = 120_000; // ~7 days at ~5s/ledger (SDF public RPC)
 
-/// The retention-window bound shared with backfill.
+/// The RPC retention window shared with backfill for fresh-start clamping.
 pub fn max_lookback() -> i64 {
     MAX_LOOKBACK_LEDGERS
 }
