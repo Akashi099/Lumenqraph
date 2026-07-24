@@ -30,12 +30,21 @@ pub fn build_schema(pool: PgPool) -> AppSchema {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1000);
+    let introspection_enabled = std::env::var("GRAPHQL_INTROSPECTION_ENABLED")
+        .ok()
+        .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
 
-    Schema::build(QueryRoot, EmptyMutation, EmptySubscription)
+    let mut schema_builder = Schema::build(QueryRoot, EmptyMutation, EmptySubscription)
         .data(pool)
         .limit_depth(max_depth)
-        .limit_complexity(max_complexity)
-        .finish()
+        .limit_complexity(max_complexity);
+
+    if !introspection_enabled {
+        schema_builder = schema_builder.disable_introspection();
+    }
+
+    schema_builder.finish()
 }
 
 // ---- Opaque cursors ----
