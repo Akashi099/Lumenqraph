@@ -68,3 +68,47 @@ pub async fn auth_and_rate_limit(
 
     Ok(next.run(req).await)
 }
+
+/// Middleware for expensive RPC-backed routes that hit upstream Soroban RPC.
+/// These routes use a separate, tighter rate limit to prevent exhaustion of
+/// shared RPC quota. Optionally requires authentication even when the main
+/// API doesn't, providing additional protection for expensive operations.
+pub async fn rpc_auth_and_rate_limit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    req: Request,
+    next: Next,
+) -> ApiResult<Response> {
+    state.http_requests.fetch_add(1, Ordering::Relaxed);
+
+    let (identity, limit) = match extract_key(&headers) {
+        Some(key) => {
+            let hash = hash_key(&key);
+            let row: Option<(bool, i32)> = sqlx::query_as(
+                "SELECT revoked, rate_limit_per_min FROM api_keys WHERE key_hash = $1",
+            )
+            .bind(&hash)
+            .fetch_optional(&state.pool)
+            .await?;
+            match row {
+                Some((false, limit)) => (format!("key:{hash}"), limit),
+                Some((true, _)) => return Err(ApiError::unauthorized("API key revoked")),
+                None => return Err(ApiError::unauthorized("invalid API key")),
+            }
+        }
+        None => {
+            if state.rpc_require_auth {
+                return Err(ApiError::unauthorized(
+                    "RPC routes require API key; missing or invalid key",
+                ));
+            }
+            ("anon".to_string(), state.rpc_anon_rate_limit)
+        }
+    };
+
+    if !state.rpc_limiter.check(&identity, limit) {
+        return Err(ApiError::too_many_requests());
+    }
+
+    Ok(next.run(req).await)
+}

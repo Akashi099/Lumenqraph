@@ -26,4 +26,13 @@ pub struct AppState {
     /// Sibling instances mounted under a path prefix (name, upstream URL) —
     /// see `routes::proxy`. Advertised in `/health` for client discovery.
     pub mounts: Arc<Vec<(String, String)>>,
+    /// Separate rate limiter for expensive RPC-backed routes (/call, /simulate).
+    /// These hit upstream Soroban RPC and must be rate-limited independently
+    /// from cheap database reads.
+    pub rpc_limiter: Arc<RateLimiter>,
+    /// When true, RPC-backed routes require a valid API key even if other
+    /// routes don't (higher protection for expensive operations).
+    pub rpc_require_auth: bool,
+    /// Requests/min allowed for unauthenticated callers on RPC routes.
+    pub rpc_anon_rate_limit: i32,
 }

@@ -70,7 +70,17 @@ When deploying Lumenqraph in production:
 5. **Rate limiting**: Configure appropriate rate limits for your use case
 6. **Database security**: Use strong authentication, network isolation, and regular backups
 7. **Monitor logs**: Track authentication failures, unusual query patterns, and rate limit hits
-8. **Use RPC rate limits**: Configure separate, tighter limits for expensive RPC-backed endpoints
+8. **RPC route protection**: Configure separate, tighter rate limits for expensive RPC-backed endpoints (`/contracts/:id/call`, `/contracts/:id/simulate`):
+
+   ```bash
+   # Stricter limit for expensive RPC operations (default: 10 req/min)
+   RPC_ROUTE_RATE_LIMIT_PER_MIN=5
+   
+   # Optionally require authentication even when other routes don't
+   RPC_REQUIRE_API_KEY=true
+   ```
+
+   These endpoints proxy requests to upstream Soroban RPC and share quota with the indexer — limiting them separately prevents a single caller from exhausting the entire RPC allocation.
 
 ### For Developers
 

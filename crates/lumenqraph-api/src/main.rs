@@ -67,6 +67,9 @@ async fn main() -> anyhow::Result<()> {
         rpc: rpc::RpcClient::new(rpc_url),
         specs: Arc::new(specs::SpecCache::new()),
         mounts: Arc::new(routes::proxy::mounts_from_env()),
+        rpc_limiter: Arc::new(RateLimiter::new()),
+        rpc_require_auth: env_bool("RPC_REQUIRE_API_KEY", false),
+        rpc_anon_rate_limit: env_parse("RPC_ROUTE_RATE_LIMIT_PER_MIN", 10),
     };
 
     let app = routes::router(state)
