@@ -19,7 +19,11 @@ cargo run -p lumenqraph-api
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo audit
+cargo deny check
 ```
+
+The `cargo audit` and `cargo deny check` commands verify dependency security and license compliance. These must pass in CI; running them locally catches issues before pushing.
 
 ### Postgres-backed tests
 

@@ -149,6 +149,41 @@ function verify(rawBody, signatureHeader, secret) {
 
 API keys are hashed using SHA-256 before database storage. Raw keys are never stored, reducing exposure if the database is compromised.
 
+## Dependency Scanning
+
+Lumenqraph uses automated tools to detect and prevent vulnerable or non-compliant dependencies from being merged:
+
+### Cargo Audit
+
+[Cargo Audit](https://github.com/rustsec/cargo-audit) checks all dependencies against the [RustSec Advisory Database](https://rustsec.org/) for known security vulnerabilities. This runs on every PR and weekly on schedule to catch newly-published advisories.
+
+**Configuration:** CI fails when open advisories are detected. Exception mechanism:
+```bash
+# Only in Cargo.toml.lock or through GitHub Security Advisory ignore list
+cargo audit --ignore RUSTSEC-XXXX
+```
+
+### Cargo Deny
+
+[Cargo Deny](https://embarkstudios.github.io/cargo-deny/) provides comprehensive supply-chain scanning:
+
+- **Advisories:** Duplicate of cargo-audit, catching known vulnerabilities
+- **Licenses:** Enforces license compliance (see `deny.toml`)
+- **Bans:** Detects and alerts on duplicate/unmaintained crates
+- **Sources:** Restricts dependencies to approved registries and git repositories
+
+**Configuration:** See [`deny.toml`](deny.toml) at the repository root.
+
+### Running Locally
+
+```bash
+# Check for known vulnerabilities
+cargo audit
+
+# Run comprehensive supply-chain checks
+cargo deny check
+```
+
 ## Incident Response
 
 If a vulnerability is confirmed:
