@@ -87,18 +87,51 @@ When contributing to Lumenqraph:
 
 ### Signature Verification
 
-All webhook signatures use HMAC-SHA256. Verification must use constant-time comparison to prevent timing attacks:
+All webhook signatures use HMAC-SHA256. Verification must use constant-time comparison to prevent timing attacks.
+
+**Rust implementation:**
+
+Use the `lumenqraph_core::crypto::verify_hmac_signature()` function for safe webhook signature verification:
 
 ```rust
-use subtle::ConstantTimeEq;
+use lumenqraph_core::crypto::verify_hmac_signature;
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 
-let expected = compute_hmac_sha256(&body, &secret);
-let constant_time_match = expected.ct_eq(&provided_signature);
+type HmacSha256 = Hmac<Sha256>;
 
-if bool::from(constant_time_match) {
+let secret = b"webhook-secret";
+let body = b"webhook payload";
+
+let mut mac = HmacSha256::new_from_slice(secret).unwrap();
+mac.update(body);
+let expected = hex::encode(mac.finalize().into_bytes());
+
+let provided = "sha256=abc123..."; // From X-Lumenqraph-Signature header
+
+if verify_hmac_signature(&expected, provided) {
     // Signature is valid
 } else {
-    // Signature is invalid
+    // Signature is invalid — reject the webhook
+}
+```
+
+The `verify_hmac_signature()` function uses the `subtle` crate's `ConstantTimeEq` trait to compare signatures in constant time, preventing timing attacks that could leak information about the secret.
+
+**JavaScript/Node.js implementation:**
+
+For consuming webhook signatures in Node.js, use the built-in `crypto.timingSafeEqual()`:
+
+```javascript
+const crypto = require("crypto");
+
+function verify(rawBody, signatureHeader, secret) {
+  const expected =
+    "sha256=" + crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+  return crypto.timingSafeEqual(
+    Buffer.from(signatureHeader),
+    Buffer.from(expected)
+  );
 }
 ```
 

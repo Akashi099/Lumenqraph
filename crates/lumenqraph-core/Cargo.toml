@@ -13,4 +13,5 @@ sqlx.workspace = true
 uuid.workspace = true
 stellar-xdr.workspace = true
 hex.workspace = true
+subtle.workspace = true
 base64 = "0.22"
