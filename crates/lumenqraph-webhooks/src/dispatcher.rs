@@ -267,6 +267,10 @@ fn extract_host(url: &str) -> String {
 async fn send(http: &reqwest::Client, d: &DueDelivery, config: &Config) -> anyhow::Result<()> {
     let body = serde_json::to_vec(&d.payload.0)?;
 
+    // Compute HMAC-SHA256 signature using the webhook secret.
+    // NOTE: Verification of received signatures should use constant-time comparison
+    // to prevent timing attacks. Use lumenqraph_core::crypto::verify_hmac_signature()
+    // on the receiving end to safely verify signatures.
     let mut mac =
         HmacSha256::new_from_slice(d.secret.as_bytes()).context("invalid webhook secret")?;
     mac.update(&body);

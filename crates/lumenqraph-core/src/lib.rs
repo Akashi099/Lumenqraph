@@ -2,6 +2,7 @@
 //! schema and decoding once here means services can never drift.
 
 pub mod codegen;
+pub mod crypto;
 pub mod diff;
 pub mod error;
 pub mod models;

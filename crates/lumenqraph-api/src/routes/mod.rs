@@ -24,7 +24,7 @@ use tower::Layer;
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 
-use crate::auth::auth_and_rate_limit;
+use crate::auth::{auth_and_rate_limit, rpc_auth_and_rate_limit};
 use crate::graphql::{self, AppSchema};
 use crate::metrics;
 use crate::state::AppState;
@@ -55,6 +55,18 @@ pub fn router(state: AppState) -> Router {
     let public = Router::new()
         .route("/health", get(health::health))
         .route("/metrics", get(metrics::metrics));
+
+    // RPC-backed routes with separate, tighter rate limiting (they hit upstream RPC).
+    let rpc_routes = Router::new()
+        .route("/contracts/:contract_id/call", post(read::call_function))
+        .route(
+            "/contracts/:contract_id/simulate",
+            post(read::simulate_call),
+        )
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            rpc_auth_and_rate_limit,
+        ));
 
     // Data + management endpoints, behind auth + rate limiting.
     let protected = Router::new()
@@ -88,11 +100,6 @@ pub fn router(state: AppState) -> Router {
             "/contracts/:contract_id/functions",
             get(read::list_functions),
         )
-        .route("/contracts/:contract_id/call", post(read::call_function))
-        .route(
-            "/contracts/:contract_id/simulate",
-            post(read::simulate_call),
-        )
         .route("/contracts/:contract_id/events", get(events::list_events))
         .route(
             "/contracts/:contract_id/transfers",
@@ -112,7 +119,7 @@ pub fn router(state: AppState) -> Router {
             auth_and_rate_limit,
         ));
 
-    let mut app = public.merge(protected).with_state(state.clone());
+    let mut app = public.merge(protected).merge(rpc_routes).with_state(state.clone());
 
     // Sibling instances under a path prefix (see `proxy`). Registered outside
     // the auth middleware: each upstream enforces its own policy.
