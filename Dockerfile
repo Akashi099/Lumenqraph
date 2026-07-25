@@ -24,5 +24,11 @@ COPY explorer /app/explorer
 # (Render's free tier has no worker type). Unused by compose/Fly.
 COPY scripts/run-all-in-one.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/run-all-in-one.sh
+# Create a non-root user and group for running services
+RUN groupadd -r lumenqraph && useradd -r -g lumenqraph lumenqraph
+# Set permissions on the app directory
+RUN chown -R lumenqraph:lumenqraph /app
+# Switch to non-root user
+USER lumenqraph
 # Default to the API; override `command:` per service in compose.
 CMD ["lumenqraph-api"]
