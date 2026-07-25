@@ -11,7 +11,7 @@ Tail contract events from Soroban RPC, decode their XDR to clean JSON, store the
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
 [![Built for Stellar](https://img.shields.io/badge/built%20for-Stellar%20Soroban-black.svg)](https://stellar.org/soroban)
 
-[Quick start](#quick-start) · [API](#api) · [Architecture](#architecture) · [Docs](docs/) · [Roadmap](#roadmap) · [Contributing](#contributing)
+[Quick start](#quick-start) · [API](#api) · [Architecture](#architecture) · [Docs](docs/) · [Security](SECURITY.md) · [Roadmap](#roadmap) · [Contributing](#contributing)
 
 ### 🔭 [Live demo → lumenqraph.onrender.com](https://lumenqraph.onrender.com)
 
@@ -46,6 +46,7 @@ Indexing Stellar **mainnet** right now. Below: the [Aquarius AMM](https://aqua.n
 - [Development](#development)
 - [Roadmap](#roadmap)
 - [Known limitations](#known-limitations)
+- [Security](SECURITY.md)
 - [Contributing](#contributing)
 - [License](#license)
 

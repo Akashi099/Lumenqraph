@@ -29,7 +29,8 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to connect to Postgres")?;
 
     let http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
+        .connect_timeout(config.connect_timeout())
+        .timeout(config.total_timeout())
         .build()?;
 
     info!(tick_secs = config.tick_secs, "starting lumenqraph webhooks");

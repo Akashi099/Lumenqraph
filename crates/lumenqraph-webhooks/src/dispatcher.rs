@@ -17,7 +17,11 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use sqlx::types::Json;
 use sqlx::PgPool;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
+use url::Url;
 
 use crate::config::Config;
 
@@ -143,6 +147,7 @@ async fn enqueue_upgrades(pool: &PgPool, batch: i64) -> anyhow::Result<u64> {
     Ok(created)
 }
 
+#[derive(Clone)]
 struct DueDelivery {
     id: i64,
     attempts: i32,
@@ -203,10 +208,24 @@ pub async fn deliver(
     http: &reqwest::Client,
     config: &Config,
 ) -> anyhow::Result<(u64, u64)> {
+    let deliveries = fetch_due(pool, config.batch_size).await?;
+    if deliveries.is_empty() {
+        return Ok((0, 0));
+    }
+
+    let per_host_limits = build_per_host_limits(&deliveries, config.max_concurrent_per_host);
+
     let mut delivered = 0u64;
     let mut failed = 0u64;
-    for d in fetch_due(pool, config.batch_size).await? {
-        match send(http, &d).await {
+    for d in deliveries {
+        let host = extract_host(&d.url);
+        let semaphore = per_host_limits
+            .get(&host)
+            .expect("host should have a semaphore");
+
+        let _permit = semaphore.acquire().await?;
+
+        match send(http, &d, config).await {
             Ok(()) => {
                 mark_delivered(pool, d.id).await?;
                 delivered += 1;
@@ -224,28 +243,59 @@ pub async fn deliver(
     Ok((delivered, failed))
 }
 
-async fn send(http: &reqwest::Client, d: &DueDelivery) -> anyhow::Result<()> {
+fn build_per_host_limits(
+    deliveries: &[DueDelivery],
+    max_per_host: usize,
+) -> HashMap<String, Arc<Semaphore>> {
+    let mut limits: HashMap<String, Arc<Semaphore>> = HashMap::new();
+    for d in deliveries {
+        let host = extract_host(&d.url);
+        limits
+            .entry(host)
+            .or_insert_with(|| Arc::new(Semaphore::new(max_per_host)));
+    }
+    limits
+}
+
+fn extract_host(url: &str) -> String {
+    Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|s| s.to_string()))
+        .unwrap_or_default()
+}
+
+async fn send(http: &reqwest::Client, d: &DueDelivery, config: &Config) -> anyhow::Result<()> {
     let body = serde_json::to_vec(&d.payload.0)?;
 
+    // Compute HMAC-SHA256 signature using the webhook secret.
+    // NOTE: Verification of received signatures should use constant-time comparison
+    // to prevent timing attacks. Use lumenqraph_core::crypto::verify_hmac_signature()
+    // on the receiving end to safely verify signatures.
     let mut mac =
         HmacSha256::new_from_slice(d.secret.as_bytes()).context("invalid webhook secret")?;
     mac.update(&body);
     let signature = hex::encode(mac.finalize().into_bytes());
 
-    let resp = http
+    let req = http
         .post(&d.url)
+        .timeout(config.total_timeout())
         .header("Content-Type", "application/json")
         .header("X-Lumenqraph-Signature", format!("sha256={signature}"))
         .header("User-Agent", "lumenqraph-webhooks/0.1")
         .body(body)
-        .send()
+        .build()
+        .context("failed to build request")?;
+
+    let resp = http
+        .execute(req)
         .await
         .context("request failed")?;
 
-    if resp.status().is_success() {
+    let status = resp.status();
+    if status.is_success() {
         Ok(())
     } else {
-        Err(anyhow::anyhow!("non-2xx status {}", resp.status()))
+        Err(anyhow::anyhow!("non-2xx status {}", status))
     }
 }
 

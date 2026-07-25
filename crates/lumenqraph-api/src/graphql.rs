@@ -22,9 +22,29 @@ pub type AppSchema = Schema<QueryRoot, EmptyMutation, EmptySubscription>;
 
 /// Build the schema, injecting the shared connection pool as context data.
 pub fn build_schema(pool: PgPool) -> AppSchema {
-    Schema::build(QueryRoot, EmptyMutation, EmptySubscription)
+    let max_depth = std::env::var("GRAPHQL_MAX_DEPTH")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(12);
+    let max_complexity = std::env::var("GRAPHQL_MAX_COMPLEXITY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1000);
+    let introspection_enabled = std::env::var("GRAPHQL_INTROSPECTION_ENABLED")
+        .ok()
+        .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+
+    let mut schema_builder = Schema::build(QueryRoot, EmptyMutation, EmptySubscription)
         .data(pool)
-        .finish()
+        .limit_depth(max_depth)
+        .limit_complexity(max_complexity);
+
+    if !introspection_enabled {
+        schema_builder = schema_builder.disable_introspection();
+    }
+
+    schema_builder.finish()
 }
 
 // ---- Opaque cursors ----
