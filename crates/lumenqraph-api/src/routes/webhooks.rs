@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+use crate::url_validation;
 
 #[derive(Deserialize)]
 pub struct CreateWebhook {
@@ -38,9 +39,9 @@ pub async fn create_webhook(
     State(state): State<AppState>,
     Json(body): Json<CreateWebhook>,
 ) -> ApiResult<Json<WebhookSubscription>> {
-    if !(body.url.starts_with("http://") || body.url.starts_with("https://")) {
-        return Err(ApiError::bad_request("url must be http(s)://"));
-    }
+    url_validation::validate_webhook_url(&body.url)
+        .map_err(|e| ApiError::bad_request(format!("invalid webhook url: {}", e)))?;
+
     if !matches!(body.kind.as_str(), "event" | "upgrade") {
         return Err(ApiError::bad_request(format!(
             "unknown kind `{}`; expected `event` or `upgrade`",

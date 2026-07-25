@@ -11,13 +11,15 @@ mod routes;
 mod rpc;
 mod specs;
 mod state;
+mod url_validation;
 
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use anyhow::Context;
+use axum::extract::DefaultBodyLimit;
+use axum::http;
 use sqlx::postgres::PgPoolOptions;
-use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -37,6 +39,54 @@ fn env_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(default)
+}
+
+fn build_cors_layer() -> tower_http::cors::CorsLayer {
+    use tower_http::cors::CorsLayer;
+
+    let origins_str = std::env::var("API_CORS_ALLOWED_ORIGINS")
+        .unwrap_or_else(|_| "same_origin".to_string());
+
+    if origins_str == "*" {
+        info!("CORS: allowing all origins (permissive mode)");
+        CorsLayer::permissive()
+    } else if origins_str.to_lowercase() == "same_origin" || origins_str.is_empty() {
+        info!("CORS: allowing same-origin requests only");
+        CorsLayer::very_permissive()
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::OPTIONS,
+                axum::http::Method::DELETE,
+            ])
+            .allow_headers([axum::http::header::CONTENT_TYPE])
+    } else {
+        info!("CORS: allowing specific origins");
+        let origins: Vec<&str> = origins_str
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let mut cors = CorsLayer::new();
+        for origin_str in origins {
+            match origin_str.parse::<http::HeaderValue>() {
+                Ok(origin) => {
+                    cors = cors.allow_origin(origin);
+                }
+                Err(_) => {
+                    info!(origin = origin_str, "invalid origin in API_CORS_ALLOWED_ORIGINS, skipping");
+                }
+            }
+        }
+        cors.allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::OPTIONS,
+            axum::http::Method::DELETE,
+        ])
+        .allow_headers([axum::http::header::CONTENT_TYPE])
+    }
 }
 
 #[tokio::main]
@@ -69,9 +119,14 @@ async fn main() -> anyhow::Result<()> {
         mounts: Arc::new(routes::proxy::mounts_from_env()),
     };
 
+    let cors_layer = build_cors_layer();
+    let max_body_bytes = env_parse::<u32>("API_MAX_BODY_BYTES", 256 * 1024);
+    info!(max_body_bytes, "enforcing request body size limit");
+
     let app = routes::router(state)
+        .layer(DefaultBodyLimit::max(max_body_bytes as usize))
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive());
+        .layer(cors_layer);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await
