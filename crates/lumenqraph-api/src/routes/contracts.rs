@@ -23,13 +23,17 @@ use crate::specs::CachedSpec;
 use crate::state::AppState;
 
 pub async fn list_contracts(State(state): State<AppState>) -> ApiResult<Json<Vec<Contract>>> {
+    // Query from the contract_summaries table (maintained by a trigger on events inserts)
+    // instead of computing a GROUP BY on every request. This provides constant-time
+    // performance independent of the total event count, making the explorer's landing
+    // page (which relies on this endpoint) performant at scale.
     let contracts: Vec<Contract> = sqlx::query_as(
         "SELECT contract_id,
-                count(*)::bigint       AS event_count,
-                min(ledger)            AS first_seen_ledger,
-                max(ledger)            AS last_seen_ledger
-         FROM events
-         GROUP BY contract_id
+                event_count,
+                first_seen_ledger,
+                last_seen_ledger
+         FROM contract_summaries
+         WHERE event_count > 0
          ORDER BY event_count DESC",
     )
     .fetch_all(&state.pool)
