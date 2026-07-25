@@ -11,11 +11,15 @@ pub struct Config {
     pub poll_interval_secs: u64,
     pub page_size: u32,
     /// Ledger to start from on a fresh index. 0 => start near the current tip.
+    /// Clamped to the RPC retention window (~7 days, 120k ledgers for SDF public RPC).
     pub start_ledger: i64,
-    /// Max ledgers behind the tip we'll request in a single catch-up. Public
-    /// Soroban RPCs reject a `getEvents` whose `startLedger` is more than a few
-    /// thousand ledgers behind the current tip (`-32001` "processing limit"), so
-    /// if the cursor falls further behind (e.g. after downtime) we skip ahead to
+    /// Max ledgers behind the tip we'll fetch in a single live polling cycle.
+    /// This is a conservative safety limit, NOT the RPC retention window.
+    /// The RPC retention window is ~7 days (120k ledgers on SDF public RPC),
+    /// but we catch up more conservatively in live polling to avoid performance
+    /// issues or RPC processing limits. Public Soroban RPCs reject `getEvents`
+    /// whose `startLedger` is too far behind (`-32001` "processing limit").
+    /// If the cursor falls further behind (e.g. after downtime) we skip ahead to
     /// this window and log the unrecoverable gap rather than stalling forever.
     /// Raise it with a retaining/paid RPC. Default 4000 (~5–6h) is conservative
     /// for the SDF public endpoints.

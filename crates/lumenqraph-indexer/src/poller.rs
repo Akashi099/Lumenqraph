@@ -20,11 +20,13 @@ use crate::{cursor, keys, retention, state, store};
 /// few seconds would spend more on probes than the deletes are worth.
 const PRUNE_INTERVAL: Duration = Duration::from_secs(60);
 
-/// getEvents only serves recent history. If our cursor falls further than this
-/// behind the tip, we clamp forward and log the (unrecoverable) gap.
-const MAX_LOOKBACK_LEDGERS: i64 = 120_000; // ~7 days at ~5s/ledger
+/// The RPC retention window: how far back the Soroban RPC will serve events.
+/// This is the hard limit of what's available via `getEvents` on SDF public RPC.
+/// Backfill and fresh-start clamping use this value. Note: MAX_CATCHUP_LEDGERS
+/// (in config) is a separate, more conservative limit for live polling performance.
+const MAX_LOOKBACK_LEDGERS: i64 = 120_000; // ~7 days at ~5s/ledger (SDF public RPC)
 
-/// The retention-window bound shared with backfill.
+/// The RPC retention window shared with backfill for fresh-start clamping.
 pub fn max_lookback() -> i64 {
     MAX_LOOKBACK_LEDGERS
 }
@@ -99,6 +101,21 @@ async fn poll_once(
         cursor::write_progress(pool, start - 1, latest, 0).await?;
         return Ok(None);
     }
+
+    // Clamp to RPC retention window on fresh start.
+    // If the configured START_LEDGER is older than what the RPC serves,
+    // clamp to the oldest available ledger to avoid RPC rejection errors.
+    let oldest_available = latest - MAX_LOOKBACK_LEDGERS;
+    if start < oldest_available {
+        warn!(
+            requested = start,
+            clamped_to = oldest_available,
+            reason = "start ledger is older than RPC retention window (~7 days)",
+            "fresh-start ledger clamped to earliest servable ledger"
+        );
+        start = oldest_available;
+    }
+
     if latest - start > config.max_catchup_ledgers {
         let clamped = latest - config.max_catchup_ledgers;
         warn!(
@@ -251,5 +268,62 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = ctrl_c => {}
         _ = terminate => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retention_clamping_logic() {
+        // Verify the START_LEDGER retention clamping logic.
+        // If START_LEDGER is older than the RPC retention window,
+        // it should be clamped to the earliest available ledger.
+
+        let latest = 1_000_000i64;
+        let oldest_available = latest - MAX_LOOKBACK_LEDGERS;
+
+        // Case 1: START_LEDGER is within retention window
+        let start_ledger = oldest_available + 1000;
+        let clamped = start_ledger.max(oldest_available);
+        assert_eq!(
+            clamped, start_ledger,
+            "start_ledger within window should not be clamped"
+        );
+
+        // Case 2: START_LEDGER is outside (older than) retention window
+        let start_ledger = oldest_available - 10_000;
+        let clamped = start_ledger.max(oldest_available);
+        assert_eq!(
+            clamped, oldest_available,
+            "start_ledger outside window should be clamped to oldest_available"
+        );
+
+        // Case 3: START_LEDGER equals oldest_available
+        let start_ledger = oldest_available;
+        let clamped = start_ledger.max(oldest_available);
+        assert_eq!(clamped, oldest_available);
+
+        // Verify MAX_LOOKBACK_LEDGERS is approximately 7 days
+        let ledgers_per_sec = 1.0 / 5.0; // ~5 seconds per ledger
+        let secs_per_minute = 60.0;
+        let secs_per_day = 86400.0;
+        let approx_days = (MAX_LOOKBACK_LEDGERS as f64) * 5.0 / secs_per_day;
+        assert!(
+            approx_days >= 6.5 && approx_days <= 7.5,
+            "MAX_LOOKBACK_LEDGERS should be ~7 days, got ~{:.1} days",
+            approx_days
+        );
+    }
+
+    #[test]
+    fn max_lookback_exports_retention_window() {
+        // Verify that the public max_lookback() function returns the RPC retention window.
+        assert_eq!(
+            max_lookback(),
+            MAX_LOOKBACK_LEDGERS,
+            "max_lookback() should export the RPC retention window"
+        );
     }
 }

@@ -6,8 +6,8 @@
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 
-use axum::extract::{ConnectInfo, Request, State};
-use axum::http::HeaderMap;
+use axum::extract::{Request, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
 use sha2::{Digest, Sha256};
@@ -97,8 +97,27 @@ pub async fn auth_and_rate_limit(
         }
     };
 
-    if !state.limiter.check(&identity, limit) {
-        return Err(ApiError::too_many_requests());
+    let rl_status = state.limiter.check(&identity, limit);
+    if !rl_status.allowed {
+        let mut response = (StatusCode::TOO_MANY_REQUESTS, crate::error::rate_limit_error()).into_response();
+
+        // Add rate limit headers
+        if let Some(retry_after) = rl_status.retry_after_secs {
+            response.headers_mut().insert(
+                "Retry-After",
+                retry_after.to_string().parse().unwrap_or_else(|_| "60".parse().unwrap()),
+            );
+        }
+        response.headers_mut().insert(
+            "X-RateLimit-Limit",
+            limit.to_string().parse().unwrap_or_else(|_| "0".parse().unwrap()),
+        );
+        response.headers_mut().insert(
+            "X-RateLimit-Remaining",
+            rl_status.tokens_remaining.to_string().parse().unwrap_or_else(|_| "0".parse().unwrap()),
+        );
+
+        return Ok(response);
     }
 
     Ok(next.run(req).await)

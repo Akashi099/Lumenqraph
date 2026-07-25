@@ -2,8 +2,10 @@
 //! current tip, then exits. Distinct from the live tail — used when registering
 //! a contract that was already emitting events before the indexer came online.
 //!
-//! Bounded by RPC retention: `getEvents` only serves ~7 days of history, so
-//! `from_ledger` is clamped to the oldest available ledger.
+//! Bounded by RPC retention window: the SDF public RPC serves ~7 days (120k
+//! ledgers) of event history, so `from_ledger` is clamped to the oldest available
+//! ledger. This is enforced via MAX_LOOKBACK_LEDGERS in poller.rs, NOT the
+//! MAX_CATCHUP_LEDGERS config (which is a live polling performance limit).
 
 use sqlx::PgPool;
 use tracing::{info, warn};
